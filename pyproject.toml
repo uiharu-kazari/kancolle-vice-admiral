@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kancolle-vice-admiral"
+version = "0.1.0"
+description = "An intelligent automation system for 艦隊これくしょん (Kantai Collection)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [
+    {name = "KanColle Vice Admiral", email = "admiral@example.com"},
+]
+keywords = ["automation", "kancolle", "browser", "ai", "selenium", "playwright"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "browser-use>=0.2.0",
+    "python-dotenv>=1.0.0",
+    "langchain-google-genai>=2.0.0",
+    "loguru>=0.7.0",
+    "pydantic>=2.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.6.0",
+    "pre-commit>=3.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/kancolle-vice-admiral"
+Documentation = "https://github.com/yourusername/kancolle-vice-admiral#readme"
+Repository = "https://github.com/yourusername/kancolle-vice-admiral.git"
+"Bug Tracker" = "https://github.com/yourusername/kancolle-vice-admiral/issues"
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["kancolle_vice_admiral"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"] 
