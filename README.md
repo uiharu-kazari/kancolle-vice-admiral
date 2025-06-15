@@ -1,5 +1,9 @@
 # KanColle Vice Admiral 🚢
 
+> 🚧 **EARLY DEVELOPMENT NOTICE** 🚧
+> 
+> This project is just getting started and is not yet functional. Core features are still being implemented and everything is subject to change.
+
 An intelligent automation system for 艦隊これくしょん (Kantai Collection) that leverages AI to generate and execute browser automation scripts for daily, weekly, and seasonal tasks.
 
 ## 🎯 Features
