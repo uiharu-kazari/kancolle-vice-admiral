@@ -1,5 +1,9 @@
 # KanColle Vice Admiral 🚢
 
+> **⚠️ Project Withhold Status**
+>
+> Development of this project is currently on hold because browser-use does not support HTML canvas interaction as required. We may resume work if we find an efficient way to interact with images.
+
 > 🚧 **EARLY DEVELOPMENT NOTICE** 🚧
 > 
 > This project is just getting started and is not yet functional. Core features are still being implemented and everything is subject to change.

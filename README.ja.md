@@ -1,5 +1,9 @@
 # 艦隊これくしょん副官 🚢
 
+> **⚠️ Project Withhold Status**
+>
+> Development of this project is currently on hold because browser-use does not support HTML canvas interaction as required. We may resume work if we find an efficient way to interact with images.
+
 艦隊これくしょんの日常・週間・季節のタスクを自動化するAI駆動のブラウザ自動化スクリプト生成・実行システムです。
 
 ## 🎯 機能

@@ -1,5 +1,9 @@
 # 舰队Collection副官 🚢
 
+> **⚠️ Project Withhold Status**
+>
+> Development of this project is currently on hold because browser-use does not support HTML canvas interaction as required. We may resume work if we find an efficient way to interact with images.
+
 一个智能的艦隊これくしょん（舰队Collection）自动化系统，利用AI生成和执行浏览器自动化脚本来完成日常、周常和季节性任务。
 
 ## 🎯 功能特性
