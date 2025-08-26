@@ -48,6 +48,7 @@ class PathConfig(BaseModel):
     scripts_output_dir: Path = Field(default=Path("./generated_scripts"))
     logs_dir: Path = Field(default=Path("./logs"))
     screenshots_dir: Path = Field(default=Path("./screenshots"))
+    assets_dir: Path = Field(default=Path("./kancolle_vice_admiral/assets"))
 
     def create_directories(self) -> None:
         """Create all required directories if they don't exist"""
@@ -88,7 +89,8 @@ class Config:
             self.paths = PathConfig(
                 scripts_output_dir=Path(os.getenv("SCRIPTS_OUTPUT_DIR", "./generated_scripts")),
                 logs_dir=Path(os.getenv("LOGS_DIR", "./logs")),
-                screenshots_dir=Path(os.getenv("SCREENSHOTS_DIR", "./screenshots"))
+                screenshots_dir=Path(os.getenv("SCREENSHOTS_DIR", "./screenshots")),
+                assets_dir=Path(os.getenv("ASSETS_DIR", "./kancolle_vice_admiral/assets"))
             )
             
             self.kancolle = KanColleConfig(

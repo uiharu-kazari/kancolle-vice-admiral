@@ -27,6 +27,8 @@ dependencies = [
     "langchain-google-genai>=2.0.0",
     "loguru>=0.7.0",
     "pydantic>=2.5.0",
+    "opencv-python-headless>=4.9.0",
+    "numpy>=1.26.0",
 ]
 
 [project.optional-dependencies]

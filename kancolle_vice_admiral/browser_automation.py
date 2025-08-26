@@ -19,6 +19,9 @@ from browser_use import Agent, BrowserSession
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.exceptions import LangChainException
 from loguru import logger
+import cv2
+import numpy as np
+from .image_recognition import find_button_coordinates
 from .config import config
 
 # Load environment variables
@@ -219,10 +222,10 @@ class KanColleBrowserAutomation:
     async def login_to_dmm_and_kancolle(self) -> bool:
         """Login to DMM and navigate to KanColle following browser-use best practices"""
         logger.info("Starting DMM login and KanColle navigation...")
-        
+
         # Check if we have saved authentication state
         auth_file = config.paths.logs_dir / "dmm_auth.json"
-        
+
         # Test if credentials are actually loaded
         if not config.dmm.email or config.dmm.email == 'your_dmm_email@example.com':
             logger.error("❌ DMM email not properly configured in .env file!")
@@ -230,126 +233,143 @@ class KanColleBrowserAutomation:
         if not config.dmm.password or config.dmm.password == 'your_dmm_password_here':
             logger.error("❌ DMM password not properly configured in .env file!")
             return False
-        
+
         logger.info(f"🔍 Using credentials: {config.dmm.email[:3]}***@{config.dmm.email.split('@')[1] if '@' in config.dmm.email else 'unknown'}")
-        
-        # Direct approach (recommended by browser-use docs for login)
+
+        # A simpler login task for the LLM. It only needs to get to the game page.
         login_task = f"""
-        Please help me login to DMM and access KanColle game:
-        
+        Please help me login to DMM and access the KanColle game page:
         1. Navigate to {config.kancolle.url}
-        2. When you see the login form, enter these credentials:
+        2. If a login form appears, enter these credentials:
            - Email/Username: {config.dmm.email}
            - Password: {config.dmm.password}
-        3. Click the login button and wait for authentication
-        4. Wait for the page to load completely after login (at least 5-10 seconds)
-        5. **IMPORTANT**: After successful login, wait at least 5 seconds before attempting to click GAME START
-        6. You should see the KanColle landing page with ship girls and a large teal "GAME START" button
-        7. The GAME START button is NOT a regular HTML element - it's embedded in a game interface
-        8. To click it properly - try these methods in order:
-                       a) **METHOD 1: Element-to-cursor coordinate mapping**
-               - Hover over element 6, then element 22 to get their actual screen coordinates
-               - Use browser automation hover actions (not raw JavaScript)
-               - Draw line between these confirmed cursor positions
-           b) **METHOD 2: Direct element clicking with proper timing**
-              - Try clicking detected interactive elements 6-22 individually with 100ms+ duration
-              - Wait 2 seconds between each attempt and check for URL changes
-           c) **METHOD 3: Canvas coordinate scanning**
-              - Use getBoundingClientRect() to get canvas bounds, then scan methodically
-              - Click every 50-100 pixels in canvas area with proper 100ms+ click duration
-           d) **Use longer click duration** (at least 100ms) for ALL click attempts - critical for canvas!
-           e) **Stop immediately** when the URL changes to kancolle-server.com (success!)
-                       f) **Verify click registration**: Check for URL changes or visual feedback after clicks
-        9. After clicking, wait at least 15-30 seconds for the game client to load on kancolle-server.com
-        10. Confirm you've reached the actual game interface (URL should change to kancolle-server.com)
-        
-                 Critical timing requirements:
-         - Wait 5+ seconds after login before clicking GAME START
-         - Use longer click duration (100ms+) for embedded game elements
-         - Wait 15-30 seconds after clicking for game to load
-         - The GAME START button needs time to become active after page load
-         - Canvas/Flash elements often require longer click durations than HTML elements
-         
-         Canvas Automation Strategy:
-         
-         **Step 1: Element Position Detection**
-         - Hover over interactive elements to get their screen positions
-         - Use browser automation hover/move actions (not JavaScript)
-         - Map element positions to canvas coordinates
-         
-         **Step 2: Systematic Canvas Clicking**
-         - Try clicking interactive elements 6-22 individually with 100ms+ duration
-         - Use coordinate-based clicking with proper timing between attempts
-         - Focus on browser automation actions (drag_drop, click) not raw JavaScript
-         
-         **Step 3: Grid Scanning if Elements Fail**
-         - Get canvas bounding box and scan systematically
-         - Click every 50-100 pixels in canvas area with 2-second intervals
-         - For KanColle scaling: if displayed 960x600 but intrinsic 1920x1200, adjust coordinates
-         
-         **Step 4: Success Detection**
-         - Monitor URL changes to kancolle-server.com after each click
-         - Stop immediately when navigation occurs
-         - Use visual feedback (page changes) to confirm success
-         
-         CRITICAL: Always use delay_ms >= 100 for canvas clicks (NOT 5ms)
-        
-        Technical notes for coordinate clicking:
-        - The button appears as a large teal/green rectangular button with white text
-        - It's positioned in the center-right area of the main game artwork
-        - Success means reaching kancolle-server.com, not just clicking the button
+        3. Click the login button and wait for the page to authenticate.
+        4. After login, you should be on the KanColle landing page which has a large "GAME START" button.
+        5. Please stop immediately once you see the "GAME START" button. Do not click it. Your task is complete at this point.
         """
-        
+
         # Create browser session with proper domain restrictions
         browser_session_config = {
             'allowed_domains': [
-                'https://*.dmm.com',
+                'https*.dmm.com',
                 'http://www.dmm.com',
                 'https://www.dmm.com',
-                'http://*.kancolle-server.com',
-                'https://*.kancolle-server.com'
+                'http*.kancolle-server.com',
+                'https*.kancolle-server.com'
             ]
         }
-        
+
         # Try to use saved authentication state if available
         if auth_file.exists():
             logger.info("📄 Found saved authentication state, attempting to reuse...")
             browser_session_config['storage_state'] = str(auth_file)
-        
+
         browser_session = BrowserSession(**browser_session_config)
-        
+
         # Define the agent creation and execution as a function for retry
         async def create_and_run_login_agent(llm):
             self.agent = Agent(
                 task=login_task,
                 llm=llm,
                 browser_session=browser_session,
-                use_vision=True,  # Enable vision to see the interface (no sensitive_data used)
+                use_vision=True,  # Vision is still useful for the LLM to see the page
                 save_conversation_path=str(config.paths.logs_dir / f"login_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
             )
-            
+
             self.session_start_time = datetime.now()
             result = await self.agent.run()
-            
+
             # Save authentication state for future use
             try:
-                # Get the browser context and save state
                 if hasattr(self.agent, 'browser') and self.agent.browser:
                     await self.agent.browser.context.storage_state(path=str(auth_file))
                     logger.info(f"💾 Saved authentication state to {auth_file}")
             except Exception as e:
                 logger.warning(f"Could not save authentication state: {e}")
-            
+
             return result
-        
+
         # Execute with retry and fallback support
-        success = await self._execute_with_retry(create_and_run_login_agent, "login")
-        
-        if success:
-            logger.success("DMM login and KanColle navigation completed!")
-            return True
-        else:
-            logger.error("Login failed after all retry attempts")
+        login_success = await self._execute_with_retry(create_and_run_login_agent, "login")
+
+        if not login_success:
+            logger.error("AI-driven login to DMM page failed.")
+            return False
+
+        logger.success("AI-driven login to DMM page successful. Now finding and clicking 'GAME START' button.")
+        try:
+            if not (self.agent and hasattr(self.agent, 'browser') and self.agent.browser):
+                logger.error("Browser object not found after login.")
+                return False
+
+            # Get the active page
+            context = self.agent.browser.contexts[0]
+            page = context.pages[-1]  # Get the last opened page
+
+            # Wait for canvas to be visible
+            game_canvas_selector = '#game_frame' # The game is in an iframe
+            await page.wait_for_selector(game_canvas_selector, timeout=30000)
+            logger.info("Game frame found. Getting the frame's content...")
+
+            frame = page.frame(name="game_frame")
+            if not frame:
+                logger.error("Could not access the game iframe.")
+                return False
+
+            # Wait for the canvas inside the iframe
+            canvas_selector_in_frame = 'canvas'
+            await frame.wait_for_selector(canvas_selector_in_frame, timeout=30000)
+            canvas_element = await frame.query_selector(canvas_selector_in_frame)
+
+            if not canvas_element:
+                logger.error("Could not find the canvas element inside the iframe.")
+                return False
+
+            logger.info("Game canvas found. Taking screenshot...")
+            await asyncio.sleep(5)  # Give it a moment to render
+
+            screenshot_bytes = await canvas_element.screenshot()
+
+            # Convert screenshot to OpenCV format
+            image_array = np.frombuffer(screenshot_bytes, np.uint8)
+            screenshot_image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+
+            if screenshot_image is None:
+                logger.error("Failed to decode screenshot from canvas.")
+                return False
+
+            # Find the button
+            template_path = str(config.paths.assets_dir / "game_start_button.png")
+            coordinates = find_button_coordinates(screenshot_image, template_path)
+
+            if coordinates:
+                logger.info(f"GAME START button found at coordinates: {coordinates}")
+
+                # Get canvas position to click relative to the viewport
+                bounding_box = await canvas_element.bounding_box()
+                if not bounding_box:
+                    logger.error("Could not get canvas bounding box.")
+                    return False
+
+                click_x = bounding_box['x'] + coordinates[0]
+                click_y = bounding_box['y'] + coordinates[1]
+
+                logger.info(f"Clicking at absolute coordinates: ({click_x}, {click_y})")
+                await page.mouse.click(click_x, click_y)
+                logger.success("Clicked 'GAME START' button.")
+
+                await asyncio.sleep(15)  # Wait for game to load
+                return True
+            else:
+                logger.error("Could not find 'GAME START' button on the screen.")
+                screenshot_path = config.paths.screenshots_dir / f"start_button_not_found_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                with open(screenshot_path, "wb") as f:
+                    f.write(screenshot_bytes)
+                logger.info(f"Screenshot of canvas saved to {screenshot_path} for debugging.")
+                return False
+
+        except Exception as e:
+            logger.error(f"An error occurred while clicking the start button: {e}")
             return False
     
     async def execute_task(self, task_description: str) -> bool:
