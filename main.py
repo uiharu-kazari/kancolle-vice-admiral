@@ -45,8 +45,6 @@ async def login_command():
     try:
         automation = await quick_login()
         logger.success("✅ Login completed successfully!")
-        
-        input("Press Enter to continue...")
         return True
         
     except Exception as e:

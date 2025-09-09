@@ -1,8 +1,6 @@
 # KanColle Vice Admiral 🚢
 
-> **⚠️ Project Withhold Status**
->
-> Development of this project is currently on hold because browser-use does not support HTML canvas interaction as required. We may resume work if we find an efficient way to interact with images.
+> Recent change: Added a Playwright-based demo flow that logs into DMM, enlarges the window, refreshes once, takes step screenshots, sends the step_3 screenshot to Gemini to locate the 'GAME START' button, overlays a visible click marker, clicks it, and keeps the browser open for inspection.
 
 > 🚧 **EARLY DEVELOPMENT NOTICE** 🚧
 > 
@@ -82,7 +80,7 @@ LOG_LEVEL=INFO
 3. Create a new API key
 4. Copy the API key to your `.env` file
 
-### Step 5: First Run
+### Step 5: First Run (CLI)
 
 ```bash
 # Activate the virtual environment
@@ -92,7 +90,33 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv run python main.py validate
 ```
 
-### Step 6: Start Using
+### Step 6: Playwright Demo (no LLM control, with LLM vision assist)
+
+```bash
+# Ensure deps installed and Chromium available
+uv sync
+uv run playwright install chromium
+
+# Set env (DMM_EMAIL, DMM_PASSWORD required; GEMINI_API_KEY required for LLM click coordinate)
+cp .env.example .env && $EDITOR .env
+
+# Run the Playwright demo
+uv run python playwright_demo.py
+
+# What it does:
+# - Opens 1920x1080 window, loads and refreshes the KanColle app page
+# - Logs in with DMM_EMAIL / DMM_PASSWORD
+# - Saves step screenshots into screenshots/
+# - Sends step_3 image to Gemini and gets the 'GAME START' center
+# - Overlays crosshair + circle + label, clicks the coordinate, takes before/after screenshots
+# - Attempts canvas-only screenshot inside the game iframe
+# - Keeps the browser open; press Ctrl+C in the terminal to exit
+```
+
+Artifacts saved under `screenshots/`:
+- step_1_loaded_*.png, step_2_post_login_*.png, step_3_scrolled_*.png
+- step_4_before_click_*.png, step_5_after_click_*.png
+- canvas_*.png (if the game canvas is accessible)
 
 ```bash
 # Test login to DMM and KanColle
@@ -107,7 +131,7 @@ python main.py execute "collect daily missions"
 
 ## 📖 Usage
 
-### Basic Commands
+### Basic Commands (CLI)
 
 ```bash
 # Login to DMM and navigate to KanColle

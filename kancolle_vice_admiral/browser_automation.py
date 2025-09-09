@@ -15,13 +15,25 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
-from browser_use import Agent, BrowserSession
+from browser_use import Agent, BrowserSession, ChatGoogle
+try:
+    # Prefer official wrapper for LangChain models
+    from browser_use.chat import ChatLangchain
+except Exception:
+    ChatLangchain = None  # Optional fallback
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.exceptions import LangChainException
 from loguru import logger
+import shutil
+import base64
 import cv2
 import numpy as np
-from .image_recognition import find_button_coordinates
+from .image_recognition import (
+    find_button_coordinates,
+    find_button_coordinates_via_gemini,
+)
+from .alignment import device_pixels_to_css_pixels
+from .tools import tools as custom_tools
 from .config import config
 
 # Load environment variables
@@ -40,22 +52,54 @@ class LLMManager:
         
     def get_current_llm(self) -> ChatGoogleGenerativeAI:
         """Get the current LLM instance with proper retry configuration"""
+        import os
+
         # Find the best available model (not rate limited)
         best_model_index = self._find_best_available_model()
         self.current_model_index = best_model_index
-        
-        current_model = self.fallback_models[self.current_model_index]
-        
-        # Configure LLM without invalid retry parameters
-        llm = ChatGoogleGenerativeAI(
-            model=current_model,
+
+        requested_model = self.fallback_models[self.current_model_index]
+
+        # Normalize Gemini model names to ChatGoogle slugs
+        def normalize_google_model(name: str) -> str:
+            name_lower = name.lower()
+            if "2.5" in name_lower:
+                return "gemini-2.5-flash"
+            if "1.5" in name_lower:
+                return "gemini-1.5-flash"
+            if "2.0" in name_lower:
+                return "gemini-2.0-flash"
+            return name
+
+        google_model = normalize_google_model(requested_model)
+
+        # Ensure ChatGoogle sees the key
+        os.environ.setdefault("GOOGLE_API_KEY", self.api_key)
+
+        # Prefer native browser-use ChatGoogle which implements the expected interface
+        try:
+            llm = ChatGoogle(model=google_model)
+            logger.info(
+                f"Using model: {google_model} (option {self.current_model_index + 1}/{len(self.fallback_models)})"
+            )
+            return llm
+        except Exception as e:
+            logger.warning(f"ChatGoogle unavailable, falling back to LangChain Gemini: {e}")
+
+        # Fallback: LangChain Gemini with official wrapper
+        langchain_llm = ChatGoogleGenerativeAI(
+            model=requested_model,
             google_api_key=self.api_key,
             temperature=0.1,
-            max_retries=1,  # Let our own retry logic handle this
+            max_retries=1,
         )
-        
-        logger.info(f"Using model: {current_model} (option {self.current_model_index + 1}/{len(self.fallback_models)})")
-        return llm
+        if ChatLangchain is not None:
+            logger.info(
+                f"Using fallback LangChain model via ChatLangchain: {requested_model} (option {self.current_model_index + 1}/{len(self.fallback_models)})"
+            )
+            return ChatLangchain(chat=langchain_llm)
+        else:
+            raise RuntimeError("ChatLangchain is required for LangChain fallback but is unavailable.")
     
     def _find_best_available_model(self) -> int:
         """Find the first available model that's not in cooldown"""
@@ -172,6 +216,7 @@ class KanColleBrowserAutomation:
     def __init__(self):
         self.agent: Optional[Agent] = None
         self.session_start_time: Optional[datetime] = None
+        self.last_canvas_screenshot_path: Optional[Path] = None
         
         # Initialize LLM manager with fallback models
         self.llm_manager = LLMManager(
@@ -219,7 +264,7 @@ class KanColleBrowserAutomation:
         
         return None if return_result else False
     
-    async def login_to_dmm_and_kancolle(self) -> bool:
+    async def login_to_dmm_and_kancolle(self, click_game_start: bool = True) -> bool:
         """Login to DMM and navigate to KanColle following browser-use best practices"""
         logger.info("Starting DMM login and KanColle navigation...")
 
@@ -251,12 +296,13 @@ class KanColleBrowserAutomation:
         # Create browser session with proper domain restrictions
         browser_session_config = {
             'allowed_domains': [
-                'https*.dmm.com',
+                'https://*.dmm.com',
                 'http://www.dmm.com',
                 'https://www.dmm.com',
-                'http*.kancolle-server.com',
-                'https*.kancolle-server.com'
-            ]
+                'http://*.kancolle-server.com',
+                'https://*.kancolle-server.com'
+            ],
+            'keep_alive': True
         }
 
         # Try to use saved authentication state if available
@@ -265,6 +311,14 @@ class KanColleBrowserAutomation:
             browser_session_config['storage_state'] = str(auth_file)
 
         browser_session = BrowserSession(**browser_session_config)
+        # Persist the session reference to avoid premature GC/closure
+        self.browser_session = browser_session
+        # When keep_alive is enabled, BrowserSession must be started before use
+        try:
+            if browser_session_config.get('keep_alive'):
+                await browser_session.start()
+        except Exception as e:
+            logger.debug(f"BrowserSession.start() not available or failed: {e}")
 
         # Define the agent creation and execution as a function for retry
         async def create_and_run_login_agent(llm):
@@ -273,7 +327,8 @@ class KanColleBrowserAutomation:
                 llm=llm,
                 browser_session=browser_session,
                 use_vision=True,  # Vision is still useful for the LLM to see the page
-                save_conversation_path=str(config.paths.logs_dir / f"login_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+                save_conversation_path=str(config.paths.logs_dir / f"login_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"),
+                tools=custom_tools,
             )
 
             self.session_start_time = datetime.now()
@@ -281,97 +336,160 @@ class KanColleBrowserAutomation:
 
             # Save authentication state for future use
             try:
-                if hasattr(self.agent, 'browser') and self.agent.browser:
-                    await self.agent.browser.context.storage_state(path=str(auth_file))
+                if hasattr(self.agent, 'browser') and self.agent.browser and self.agent.browser.contexts:
+                    await self.agent.browser.contexts[0].storage_state(path=str(auth_file))
                     logger.info(f"💾 Saved authentication state to {auth_file}")
             except Exception as e:
                 logger.warning(f"Could not save authentication state: {e}")
 
             return result
 
-        # Execute with retry and fallback support
-        login_success = await self._execute_with_retry(create_and_run_login_agent, "login")
+        # Execute with retry and fallback support and inspect result for success
+        result = await self._execute_with_retry(create_and_run_login_agent, "login", return_result=True)
+
+        def _agent_indicates_success(agent_result) -> bool:
+            if agent_result is None:
+                return False
+            # Prefer structured success flags if present
+            if isinstance(agent_result, dict) and 'success' in agent_result:
+                return bool(agent_result.get('success'))
+            # Fallback: infer from textual content
+            text = str(agent_result).lower()
+            if 'success=false' in text or 'without success' in text or 'task cannot be completed' in text:
+                return False
+            return True
+
+        login_success = _agent_indicates_success(result)
 
         if not login_success:
             logger.error("AI-driven login to DMM page failed.")
             return False
 
-        logger.success("AI-driven login to DMM page successful. Now finding and clicking 'GAME START' button.")
+        logger.success("AI-driven login to DMM page successful.")
+        if not click_game_start:
+            # Deterministic capture via tool (no fallback)
+            try:
+                await self._call_capture_tool(wait_seconds=5)
+            except Exception as e:
+                logger.debug(f"capture_canvas tool failed: {e}")
+            return True
+
+        # Optionally click GAME START via a small agent, then capture deterministically
         try:
-            if not (self.agent and hasattr(self.agent, 'browser') and self.agent.browser):
-                logger.error("Browser object not found after login.")
-                return False
+            llm = self.llm_manager.get_current_llm()
+            start_task = (
+                "You are on the KanColle landing page after DMM login. "
+                "Click the large 'GAME START' button once and wait for the game to begin loading. "
+                "Do not navigate elsewhere. Then stop."
+            )
+            start_agent = Agent(
+                task=start_task,
+                llm=llm,
+                browser_session=self.browser_session,
+                use_vision=True,
+                save_conversation_path=str(config.paths.logs_dir / f"start_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"),
+                tools=custom_tools,
+            )
+            await start_agent.run()
 
-            # Get the active page
-            context = self.agent.browser.contexts[0]
-            page = context.pages[-1]  # Get the last opened page
-
-            # Wait for canvas to be visible
-            game_canvas_selector = '#game_frame' # The game is in an iframe
-            await page.wait_for_selector(game_canvas_selector, timeout=30000)
-            logger.info("Game frame found. Getting the frame's content...")
-
-            frame = page.frame(name="game_frame")
-            if not frame:
-                logger.error("Could not access the game iframe.")
-                return False
-
-            # Wait for the canvas inside the iframe
-            canvas_selector_in_frame = 'canvas'
-            await frame.wait_for_selector(canvas_selector_in_frame, timeout=30000)
-            canvas_element = await frame.query_selector(canvas_selector_in_frame)
-
-            if not canvas_element:
-                logger.error("Could not find the canvas element inside the iframe.")
-                return False
-
-            logger.info("Game canvas found. Taking screenshot...")
-            await asyncio.sleep(5)  # Give it a moment to render
-
-            screenshot_bytes = await canvas_element.screenshot()
-
-            # Convert screenshot to OpenCV format
-            image_array = np.frombuffer(screenshot_bytes, np.uint8)
-            screenshot_image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
-
-            if screenshot_image is None:
-                logger.error("Failed to decode screenshot from canvas.")
-                return False
-
-            # Find the button
-            template_path = str(config.paths.assets_dir / "game_start_button.png")
-            coordinates = find_button_coordinates(screenshot_image, template_path)
-
-            if coordinates:
-                logger.info(f"GAME START button found at coordinates: {coordinates}")
-
-                # Get canvas position to click relative to the viewport
-                bounding_box = await canvas_element.bounding_box()
-                if not bounding_box:
-                    logger.error("Could not get canvas bounding box.")
-                    return False
-
-                click_x = bounding_box['x'] + coordinates[0]
-                click_y = bounding_box['y'] + coordinates[1]
-
-                logger.info(f"Clicking at absolute coordinates: ({click_x}, {click_y})")
-                await page.mouse.click(click_x, click_y)
-                logger.success("Clicked 'GAME START' button.")
-
-                await asyncio.sleep(15)  # Wait for game to load
-                return True
-            else:
-                logger.error("Could not find 'GAME START' button on the screen.")
-                screenshot_path = config.paths.screenshots_dir / f"start_button_not_found_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-                with open(screenshot_path, "wb") as f:
-                    f.write(screenshot_bytes)
-                logger.info(f"Screenshot of canvas saved to {screenshot_path} for debugging.")
-                return False
-
+            # Deterministic capture via tool (no fallback)
+            await self._call_capture_tool(wait_seconds=5)
+            return True
         except Exception as e:
-            logger.error(f"An error occurred while clicking the start button: {e}")
+            logger.error(f"An error occurred while starting the game: {e}")
             return False
     
+    async def _mini_screenshot_agent(self, wait_seconds: int = 5) -> Optional[Path]:
+        """(Deprecated) Minimal agent for screenshot. Prefer _call_capture_tool."""
+        try:
+            llm = self.llm_manager.get_current_llm()
+            task = (
+                f"Wait for {wait_seconds} seconds. Then confirm the current page is visible. "
+                f"Do not navigate or click. Then stop."
+            )
+            agent = Agent(
+                task=task,
+                llm=llm,
+                browser_session=self.browser_session,
+                use_vision=True,
+                save_conversation_path=str(config.paths.logs_dir / f"screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"),
+            )
+            history = await agent.run()
+
+            # Prefer file paths
+            try:
+                paths = history.screenshot_paths() if hasattr(history, 'screenshot_paths') else []
+            except Exception:
+                paths = []
+
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            out_path = config.paths.screenshots_dir / f"canvas_{ts}.png"
+
+            if paths:
+                last_path = Path(paths[-1])
+                try:
+                    if last_path.exists():
+                        shutil.copy(last_path, out_path)
+                        self.last_canvas_screenshot_path = out_path
+                        logger.info(f"🖼️ Screenshot saved to {out_path} (copied from agent history)")
+                        return out_path
+                except Exception as e:
+                    logger.debug(f"Copying screenshot failed, will try base64 fallback: {e}")
+
+            # Fallback to base64 screenshots
+            try:
+                b64_list = history.screenshots() if hasattr(history, 'screenshots') else []
+            except Exception:
+                b64_list = []
+            if b64_list:
+                b64 = b64_list[-1]
+                try:
+                    with open(out_path, 'wb') as f:
+                        f.write(base64.b64decode(b64))
+                    self.last_canvas_screenshot_path = out_path
+                    logger.info(f"🖼️ Screenshot saved to {out_path} (from base64)")
+                    return out_path
+                except Exception as e:
+                    logger.warning(f"Saving base64 screenshot failed: {e}")
+
+            logger.warning("No screenshot available from mini-agent history")
+            return None
+        except Exception as e:
+            logger.warning(f"Mini screenshot agent failed: {e}")
+            return None
+
+    async def _call_capture_tool(self, wait_seconds: int = 5) -> Optional[Path]:
+        """Call the custom capture_canvas tool deterministically (no fallback)."""
+        llm = self.llm_manager.get_current_llm()
+        task = (
+            f"Call the capture_canvas_frame tool with wait_seconds={wait_seconds}. "
+            f"Save the screenshot and return the file path. Do not do anything else."
+        )
+        agent = Agent(
+            task=task,
+            llm=llm,
+            browser_session=self.browser_session,
+            use_vision=False,
+            tools=custom_tools,
+            save_conversation_path=str(config.paths.logs_dir / f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"),
+        )
+        result = await agent.run()
+        # If the tool returns a path string, try to interpret
+        try:
+            result_str = str(result)
+            if "canvas_" in result_str and ".png" in result_str:
+                # naive parse
+                import re
+                m = re.search(r"(canvas_\d{8}_\d{6}\.png)", result_str)
+                if m:
+                    p = config.paths.screenshots_dir / m.group(1)
+                    if p.exists():
+                        self.last_canvas_screenshot_path = p
+                        return p
+        except Exception:
+            pass
+        return None
+
     async def execute_task(self, task_description: str) -> bool:
         """Execute a specific KanColle task"""
         logger.info(f"Executing task: {task_description}")
@@ -520,10 +638,11 @@ async def quick_login() -> KanColleBrowserAutomation:
     
     if success:
         logger.success("Login successful! Ready for automation tasks.")
+        return automation
     else:
         logger.error("Login failed!")
-    
-    return automation
+        # Raise to ensure callers handle failure correctly
+        raise RuntimeError("Login failed")
 
 
 async def run_daily_tasks():

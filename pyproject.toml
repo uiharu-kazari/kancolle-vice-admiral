@@ -29,6 +29,9 @@ dependencies = [
     "pydantic>=2.5.0",
     "opencv-python-headless>=4.9.0",
     "numpy>=1.26.0",
+    "google-generativeai>=0.7.0",
+    "google-genai>=1.1.0",
+    "playwright>=1.47.0",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +41,7 @@ dev = [
     "flake8>=6.0.0",
     "mypy>=1.6.0",
     "pre-commit>=3.5.0",
+    "requests>=2.31.0",
 ]
 
 [project.urls]
