@@ -1,8 +1,8 @@
 # 舰队Collection副官 🚢
 
-> **⚠️ Project Withhold Status**
+> ⚠️ **已归档** ⚠️
 >
-> Development of this project is currently on hold because browser-use does not support HTML canvas interaction as required. We may resume work if we find an efficient way to interact with images.
+> 本仓库已归档，将不再继续开发。由于ChatGPT Atlas浏览器现已能够操作HTML canvas，本项目已不再必要。本仓库仅保留作为历史参考。
 
 一个智能的艦隊これくしょん（舰队Collection）自动化系统，利用AI生成和执行浏览器自动化脚本来完成日常、周常和季节性任务。
 

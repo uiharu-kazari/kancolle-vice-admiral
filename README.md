@@ -1,5 +1,9 @@
 # KanColle Vice Admiral 🚢
 
+> ⚠️ **ARCHIVED** ⚠️
+>
+> This repository is archived and will no longer be developed. With ChatGPT Atlas browser now capable of operating on HTML canvas, this project is no longer necessary. The repository is kept for historical reference only.
+
 > Recent change: Added a Playwright-based demo flow that logs into DMM, enlarges the window, refreshes once, takes step screenshots, sends the step_3 screenshot to Gemini to locate the 'GAME START' button, overlays a visible click marker, clicks it, and keeps the browser open for inspection.
 
 > 🚧 **EARLY DEVELOPMENT NOTICE** 🚧
